@@ -401,3 +401,91 @@ void Ground::displayUI() {
 }
 
 void Ground::animate(float currentTime, Renderer &renderer) { pebbleUBOData.time = currentTime; }
+
+void Grass::init(Renderer &renderer, const std::string &modelPath, const std::string &meshName) {
+    MeshData::init(renderer, modelPath, meshName);
+
+    // Allocate extra descriptor set for the base mesh
+    std::array<vk::DescriptorSetLayout, 1> layouts = {perObjectDescriptorSetLayout};
+    vk::DescriptorSetAllocateInfo allocInfo(renderer.m_descriptorPool, static_cast<uint32_t>(layouts.size()), layouts.data());
+    std::array<vk::DescriptorSet, 1> descriptorSets;
+    VK_CHECK(renderer.m_logicalDevice.allocateDescriptorSets(&allocInfo, descriptorSets.data()));
+    perObjectDescriptorSetBaseMesh = descriptorSets[0];
+
+    renderMode = MeshData::RenderMode::GRASS;
+    renderBaseMesh = false;
+
+    shadingUBOData.doShading = true;
+    shadingUBOData.diffuse = vec3(0.2, 0.8, 0.1);
+    
+    // Initialize grass UBO data
+    grassUBOData.nbFaces = heMesh.nbFaces;
+
+    // Create uniform buffers
+    shadingUBO = renderer.createUniformBuffer(sizeof(shaderInterface::ShadingUBO));
+    shadingUBOBaseMesh = renderer.createUniformBuffer(sizeof(shaderInterface::ShadingUBO));
+    heUBO = renderer.createUniformBuffer(sizeof(shaderInterface::HeUBO));
+    grassUBO = renderer.createUniformBuffer(sizeof(shaderInterface::GrassUBO));
+
+    // Update descriptor sets for base mesh
+    vk::DescriptorBufferInfo shadingUBOBaseMeshBufferInfo = {shadingUBOBaseMesh.buffer, 0, VK_WHOLE_SIZE};
+    vk::DescriptorBufferInfo heUBOBufferInfo = {heUBO.buffer, 0, VK_WHOLE_SIZE};
+    std::vector<vk::WriteDescriptorSet> heUBOWrite = {
+        {perObjectDescriptorSetBaseMesh, shaderInterface::U_configBinding,  0, 1, vk::DescriptorType::eUniformBuffer, nullptr, &heUBOBufferInfo,              nullptr},
+        {perObjectDescriptorSetBaseMesh, shaderInterface::U_shadingBinding, 0, 1, vk::DescriptorType::eUniformBuffer, nullptr, &shadingUBOBaseMeshBufferInfo, nullptr}
+    };
+    renderer.m_logicalDevice.updateDescriptorSets(heUBOWrite, nullptr);
+
+    // Update descriptor sets for grass mesh pipeline
+    vk::DescriptorBufferInfo grassUBOBufferInfo(grassUBO.buffer, 0, VK_WHOLE_SIZE);
+    vk::DescriptorBufferInfo shadingUBOBufferInfo(shadingUBO.buffer, 0, VK_WHOLE_SIZE);
+    std::vector<vk::WriteDescriptorSet> grassUBOWrite = {
+        {perObjectDescriptorSet, shaderInterface::U_configBinding,  0, 1, vk::DescriptorType::eUniformBuffer, nullptr, &grassUBOBufferInfo,   nullptr},
+        {perObjectDescriptorSet, shaderInterface::U_shadingBinding, 0, 1, vk::DescriptorType::eUniformBuffer, nullptr, &shadingUBOBufferInfo, nullptr},
+    };
+    renderer.m_logicalDevice.updateDescriptorSets(grassUBOWrite, nullptr);
+
+    // Initialize UBO data for base mesh
+    heUBOData.nbFaces = heMesh.nbFaces;
+    heUBOData.doSkinning = isSkeletal;
+    shadingUBODataBaseMesh = shaderInterface::ShadingUBO(shadingUBOData);
+    shadingUBODataBaseMesh.doAo = false;
+
+    updateUBOs();
+}
+
+void Grass::bindAndDispatch(vk::CommandBuffer &cmd, const vk::PipelineLayout &layout) {
+    std::array<vk::DescriptorSet, 2> sets = {heDescriptorSet, perObjectDescriptorSet};
+    modelMatrix = glm::scale(mat4(1.0f), vec3(2.0f)); // DEBUG: Scale the grass mesh
+    cmd.pushConstants(layout, trueAllGraphics, 0, sizeof(mat4), &modelMatrix);
+    cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, shaderInterface::HESet, sets, {});
+    
+    // For now, dispatch one task per face
+    cmd.drawMeshTasksEXT(heMesh.nbFaces, 1, 1);
+}
+
+void Grass::bindAndDispatchBaseMesh(vk::CommandBuffer &cmd, const vk::PipelineLayout &layout) {
+    std::array<vk::DescriptorSet, 2> sets = {heDescriptorSet, perObjectDescriptorSetBaseMesh};
+    cmd.pushConstants(layout, trueAllGraphics, 0, sizeof(mat4), &modelMatrix);
+    cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, shaderInterface::HESet, sets, {});
+    cmd.drawMeshTasksEXT(heMesh.nbFaces, 1, 1);
+}
+
+void Grass::updateUBOs() {
+    // Update base mesh UBO data
+    shadingUBODataBaseMesh = shaderInterface::ShadingUBO(shadingUBOData);
+    shadingUBODataBaseMesh.doAo = false;
+    
+    // Copy all UBO data to GPU
+    memcpy(shadingUBO.mappedMemory, &shadingUBOData, sizeof(shaderInterface::ShadingUBO));
+    memcpy(shadingUBOBaseMesh.mappedMemory, &shadingUBODataBaseMesh, sizeof(shaderInterface::ShadingUBO));
+    memcpy(heUBO.mappedMemory, &heUBOData, sizeof(shaderInterface::HeUBO));
+    memcpy(grassUBO.mappedMemory, &grassUBOData, sizeof(shaderInterface::GrassUBO));
+}
+
+void Grass::displayUI() {
+    grassUBOData.displayUI(name);
+    shadingUBOData.displayUI(name);
+}
+
+void Grass::animate(float currentTime, Renderer &renderer) { grassUBOData.time = currentTime; }

@@ -17,6 +17,7 @@ class App {
     Pipeline m_hePipeline{};
     Pipeline m_parametricPipline{};
     Pipeline m_pebblePipeline{};
+    Pipeline m_grassPipeline{};
 
     vk::DescriptorSetLayout m_uboDescriptorSetLayout;
     vk::DescriptorSet m_uboDescriptorSet;
@@ -27,8 +28,9 @@ class App {
     UniformBuffer m_globalShadingUBO;
     
     Dragon dragon{};
-    Coat dragonCoat{};
-    Ground ground{};
+    //Coat dragonCoat{};
+    //Ground ground{};
+    Grass grassField{};
 
     Camera m_camera;
     bool m_animation = true;
@@ -91,14 +93,15 @@ void App::init() {
     memcpy(m_globalShadingUBO.mappedMemory, &m_globalShadingUBOData, sizeof(shaderInterface::GlobalShadingUBO));
     m_camera.init(vec3(0, 3, 3), vec3(0));
     
-    
     dragon.init(m_renderer, "assets/demo/dragon/dragon_8k.obj", "Dragon", "assets/demo/dragon/dragon_8k.gltf", "assets/parametric_luts/scale_lut.obj", "assets/demo/dragon/dargon_8k_ao.png", "assets/demo/dragon/dragon_element_type_map_2k.png");
-    dragonCoat.init(m_renderer, "assets/demo/dragon/dragon_coat.obj", "Coat", "assets/demo/dragon/dragon_coat.gltf", "assets/demo/dragon/dragon_coat_ao.png");
-    ground.init(m_renderer, "assets/demo/ground.obj", "Ground");
-
+    //dragonCoat.init(m_renderer, "assets/demo/dragon/dragon_coat.obj", "Coat", "assets/demo/dragon/dragon_coat.gltf", "assets/demo/dragon/dragon_coat_ao.png");
+    //ground.init(m_renderer, "assets/demo/ground.obj", "Ground");
+    grassField.init(m_renderer, "assets/demo/plane_100x100.obj", "Grass");
+    
     m_hePipeline = m_renderer.createPipeline({"shaders/halfEdges/halfEdge.mesh","shaders/halfEdges/halfEdge.frag"}, PipelineDesc{});
     m_parametricPipline = m_renderer.createPipeline({"shaders/parametric/parametric.task","shaders/parametric/parametric.mesh","shaders/parametric/parametric.frag"}, PipelineDesc{});
     m_pebblePipeline = m_renderer.createPipeline({"shaders/pebble/pebble.task", "shaders/pebble/pebble.mesh", "shaders/pebble/pebble.frag"}, PipelineDesc{});
+    m_grassPipeline = m_renderer.createPipeline({"shaders/grass/grass.task", "shaders/grass/grass.mesh", "shaders/grass/grass.frag"}, PipelineDesc{});
 }
 
 void App::drawUI() {
@@ -128,8 +131,12 @@ void App::drawUI() {
     ImGui::PopID();
     ImGui::Separator();
     ImGui::Separator();
-    ImGui::PushID("Coat");
-    dragonCoat.displayUI();
+    //ImGui::PushID("Coat");
+    //dragonCoat.displayUI();
+    //ImGui::PopID();
+    ImGui::Separator();
+    ImGui::PushID("Grass");
+    grassField.displayUI();
     ImGui::PopID();
     ImGui::End();
 }
@@ -149,8 +156,9 @@ void App::animate(float p_deltaTime) {
 
     // update time
     dragon.animate(m_currentTime, m_renderer);
-    dragonCoat.animate(m_currentTime, m_renderer);
-    ground.animate(m_currentTime, m_renderer);
+    //dragonCoat.animate(m_currentTime, m_renderer);
+    //ground.animate(m_currentTime, m_renderer);
+    grassField.animate(m_currentTime, m_renderer);
 }
 
 void App::run() {
@@ -194,8 +202,9 @@ void App::updateSceneUBOs() {
     memcpy(m_viewUBO.mappedMemory, &m_viewUBOData, sizeof(shaderInterface::ViewUBO));
     memcpy(m_globalShadingUBO.mappedMemory, &m_globalShadingUBOData, sizeof(shaderInterface::GlobalShadingUBO));
     dragon.updateUBOs();
-    dragonCoat.updateUBOs();
-    ground.updateUBOs();
+    //dragonCoat.updateUBOs();
+    //ground.updateUBOs();
+    grassField.updateUBOs();
 }
 
 void App::drawFrame() {
@@ -207,19 +216,29 @@ void App::drawFrame() {
     // dragon
     cmd.setViewport(0, vk::Viewport(0.0f, 0.0f, extent.width, extent.height, 0.0f, 1.0f));
     cmd.setScissor(0, vk::Rect2D({0, 0}, extent));
-    cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_parametricPipline.pipeline);
-    cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_parametricPipline.layout, 0, 1, &m_uboDescriptorSet, 0, nullptr);
-    dragon.bindAndDispatch(cmd, m_parametricPipline.layout);
-    dragonCoat.bindAndDispatch(cmd, m_parametricPipline.layout);
-    
+    //cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_parametricPipline.pipeline);
+    //cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_parametricPipline.layout, 0, 1, &m_uboDescriptorSet, 0, nullptr);
+    //dragon.bindAndDispatch(cmd, m_parametricPipline.layout);
+    //dragonCoat.bindAndDispatch(cmd, m_parametricPipline.layout);
+    //
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_hePipeline.pipeline);
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_hePipeline.layout, 0, 1, &m_uboDescriptorSet, 0, nullptr);
     dragon.bindAndDispatchBaseMesh(cmd, m_hePipeline.layout);
 
-    cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pebblePipeline.pipeline);
-    cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_pebblePipeline.layout, 0, 1, &m_uboDescriptorSet, 0, nullptr);
-    ground.bindAndDispatch(cmd, m_pebblePipeline.layout);
+    //cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pebblePipeline.pipeline);
+    //cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_pebblePipeline.layout, 0, 1, &m_uboDescriptorSet, 0, nullptr);
+    //ground.bindAndDispatch(cmd, m_pebblePipeline.layout);
     
+
+    cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_hePipeline.pipeline);
+    cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_hePipeline.layout, 0, 1, &m_uboDescriptorSet, 0, nullptr);
+    grassField.bindAndDispatchBaseMesh(cmd, m_hePipeline.layout);
+
+
+    cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_grassPipeline.pipeline);
+    cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_grassPipeline.layout, 0, 1, &m_uboDescriptorSet, 0, nullptr);
+    grassField.bindAndDispatch(cmd, m_grassPipeline.layout);
+
     m_renderer.endRendering(cmd);
     
     // UI pass

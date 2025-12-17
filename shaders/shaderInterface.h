@@ -12,6 +12,7 @@
 #define HE_PIPELINE
 #define RESURFACING_PIPELINE
 #define PEBBLE_PIPELINE
+#define GRASS_PIPELINE
 
 namespace shaderInterface {
 #else
@@ -476,6 +477,25 @@ UBOStruct(scalar, PerObjectSet, U_configBinding) PebbleUBO {
     }
 #endif
 }UBOName(pebbleUbo);
+#endif
+
+#ifdef GRASS_PIPELINE
+UBOStruct(scalar, PerObjectSet, U_configBinding) GrassUBO {
+    int nbFaces UBODefaultVal(0);
+    float time UBODefaultVal(0.0f);
+
+#ifdef __cplusplus
+    void displayUI(std::string meshName = "") {
+        if (ImGui::CollapsingHeader(("Grass UBO " + meshName).c_str())) {
+            ImGui::PushItemWidth(100.0f);
+            ImGui::InputInt("Nb Faces", &nbFaces, 1, 100);
+            ImGui::Separator();
+            ImGui::PopItemWidth();
+        }
+    }
+#endif
+}
+UBOName(grassUbo);
 #endif
 
 #ifdef __cplusplus

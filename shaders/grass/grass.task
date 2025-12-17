@@ -1,0 +1,28 @@
+#version 460
+#extension GL_EXT_mesh_shader : enable
+
+#include "../shaderInterface.h"
+
+struct TaskPayload {
+    uint faceIndex;
+};
+
+taskPayloadSharedEXT TaskPayload payload[];
+
+void main() {
+    uint taskIndex = gl_WorkGroupID.x;
+
+    vec3 faceCenter = getFaceCenter(taskIndex); 
+    vec3 worldFaceCenter = (constants.model * vec4(faceCenter, 1.0)).xyz;
+    
+    vec3 cameraPos = viewUbo.cameraPosition.xyz;
+    float distance = length(worldFaceCenter - cameraPos);
+    
+    float maxGrassDistance = 10.0;
+ 
+    // Cull far away patches
+    if (distance <= maxGrassDistance) {
+        payload[0].faceIndex = taskIndex;
+        EmitMeshTasksEXT(1, 1, 1);
+    }
+}

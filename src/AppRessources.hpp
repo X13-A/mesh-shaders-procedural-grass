@@ -60,6 +60,7 @@ struct MeshData {
         HALF_EDGE = 0,
         PARAMETRIC = 1,
         PEBBLE = 2,
+        GRASS = 3,
     };
 
     // === Mesh Data ===
@@ -169,6 +170,31 @@ struct Ground : MeshData {
     void displayUI();
     void animate(float currentTime, Renderer &renderer);
 
+    void cleanup() {
+        // Implement resource cleanup as necessary
+    }
+};
+
+struct Grass : MeshData {
+    shaderInterface::ShadingUBO shadingUBOData;
+    shaderInterface::ShadingUBO shadingUBODataBaseMesh;
+    shaderInterface::HeUBO heUBOData;
+    shaderInterface::GrassUBO grassUBOData;
+
+    UniformBuffer shadingUBO;
+    UniformBuffer shadingUBOBaseMesh;
+    UniformBuffer heUBO;
+    UniformBuffer grassUBO;
+
+    vk::DescriptorSet perObjectDescriptorSetBaseMesh;
+
+    void init(Renderer &renderer, const std::string &modelPath, const std::string &meshName);
+    void bindAndDispatchBaseMesh(vk::CommandBuffer &cmd, const vk::PipelineLayout &layout);
+    void bindAndDispatch(vk::CommandBuffer &cmd, const vk::PipelineLayout &layout);
+    void updateUBOs();
+    void displayUI();
+    void animate(float currentTime, Renderer &renderer);
+    
     void cleanup() {
         // Implement resource cleanup as necessary
     }

@@ -1,0 +1,139 @@
+#version 450
+#extension GL_EXT_mesh_shader : require
+#define GRASS_PIPELINE
+
+#include "../shaderInterface.h"
+
+layout(local_size_x = 1) in;
+layout(triangles, max_vertices = 8, max_primitives = 10) out;
+
+struct TaskPayload {
+    uint faceIndex;
+};
+
+taskPayloadSharedEXT TaskPayload payload[];
+
+layout(location = 0) out vec3 fragWorldPos[];
+layout(location = 1) out vec3 fragNormal[];
+layout(location = 2) out vec2 fragTexCoord[];
+
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+}
+
+void generateGrassBlade(uint faceIndex, out vec3 vertices[8], out vec2 uvs[8], out vec3 normals[8]) {
+    // Position of the first vertex in the face
+    vec3 basePos = getVertexPosRelative(faceIndex, 0);
+    vec3 faceNormal = getFaceNormal(faceIndex);
+    
+    // Random position-based offset
+    vec2 randSeed = basePos.xz + vec2(faceIndex * 0.1);
+    float heightRandom = hash(randSeed) * 0.5 + 0.75;
+    float xOffset = (hash(randSeed + vec2(1.0, 0.0)) - 0.5) * 0.2;
+    float zOffset = (hash(randSeed + vec2(0.0, 1.0)) - 0.5) * 0.2;
+    basePos += vec3(xOffset, 0.0, zOffset);
+    
+    float grassHeight = 0.1 * heightRandom;
+    float grassWidth = 0.005;
+
+    // Create a local coordinate system
+    vec3 up = normalize(faceNormal);
+    vec3 right = normalize(cross(up, vec3(0, 0, 1)));
+    vec3 forward = cross(right, up);
+    
+    // Simple wind animation
+    float windSway = sin(grassUbo.time * 2.0 + basePos.x * 1.0) * 0.05;
+    
+    // Base vertices
+    vec3 baseVertices[8] = {
+        vec3(-0.5, 0.0, -0.5), // Bottom vertices
+        vec3( 0.5, 0.0, -0.5),
+        vec3( 0.5, 0.0,  0.5),
+        vec3(-0.5, 0.0,  0.5),
+        vec3(-0.5, 1.0, -0.5), // Top vertices
+        vec3( 0.5, 1.0, -0.5),
+        vec3( 0.5, 1.0,  0.5),
+        vec3(-0.5, 1.0,  0.5)
+    };
+    
+    // Not great, will be replaced by parametric normals anyway
+    vec3 baseNormals[8] = {
+        normalize(vec3(-1.0, 0.0, -1.0)), 
+        normalize(vec3( 1.0, 0.0, -1.0)), 
+        normalize(vec3( 1.0, 0.0,  1.0)), 
+        normalize(vec3(-1.0, 0.0,  1.0)), 
+        normalize(vec3(-1.0,  1.0, -1.0)),
+        normalize(vec3( 1.0,  1.0, -1.0)),
+        normalize(vec3( 1.0,  1.0,  1.0)),
+        normalize(vec3(-1.0,  1.0,  1.0)) 
+    };
+    
+    // Transform matrix from local to world space
+    mat3 localToWorld = mat3(
+        right * grassWidth,
+        up * grassHeight,
+        forward * grassWidth
+    );
+    
+    // Transform vertices and normals
+    for (int i = 0; i < 8; i++) {
+        vec3 localPos = baseVertices[i];
+
+        // Add wind effect to top vertices
+        if (localPos.y > 0.5) {
+            localPos += vec3(windSway / grassWidth, 0.0, 0.0);
+        }
+        
+        // Transform to world space
+        vertices[i] = basePos + localToWorld * localPos;
+        normals[i] = normalize(localToWorld * baseNormals[i]);
+    }
+    
+    // Generate UVs
+    uvs[0] = vec2(0.0, 0.0);
+    uvs[1] = vec2(1.0, 0.0);
+    uvs[2] = vec2(1.0, 0.0);
+    uvs[3] = vec2(0.0, 0.0);
+    
+    uvs[4] = vec2(0.0, 1.0);
+    uvs[5] = vec2(1.0, 1.0);
+    uvs[6] = vec2(1.0, 1.0);
+    uvs[7] = vec2(0.0, 1.0);
+}
+
+void main()
+{
+    uint faceIndex = payload[0].faceIndex;
+    
+    vec3 grassVertices[8];
+    vec2 grassUVs[8];
+    vec3 grassNormals[8]; // Add this line
+    generateGrassBlade(faceIndex, grassVertices, grassUVs, grassNormals); // Update this line
+    
+    // Transform vertices to clip space and set output data
+    mat4 mvp = viewUbo.projection * viewUbo.view * constants.model;
+    
+    for (int i = 0; i < 8; i++)
+    {
+        gl_MeshVerticesEXT[i].gl_Position = mvp * vec4(grassVertices[i], 1.0);
+        fragWorldPos[i] = (constants.model * vec4(grassVertices[i], 1.0)).xyz;
+        fragTexCoord[i] = grassUVs[i];
+        
+        // Use the generated normals instead of the face normal
+        fragNormal[i] = normalize(mat3(constants.model) * vec3(0, 1, 0));
+    }
+    
+    // Define triangles for the grass blade box (same as before)
+    gl_PrimitiveTriangleIndicesEXT[0] = uvec3(3, 7, 6);
+    gl_PrimitiveTriangleIndicesEXT[1] = uvec3(3, 6, 2);
+    gl_PrimitiveTriangleIndicesEXT[2] = uvec3(0, 1, 5);
+    gl_PrimitiveTriangleIndicesEXT[3] = uvec3(0, 5, 4);
+    gl_PrimitiveTriangleIndicesEXT[4] = uvec3(0, 4, 7);
+    gl_PrimitiveTriangleIndicesEXT[5] = uvec3(0, 7, 3);
+    gl_PrimitiveTriangleIndicesEXT[6] = uvec3(1, 2, 6);
+    gl_PrimitiveTriangleIndicesEXT[7] = uvec3(1, 6, 5);
+    gl_PrimitiveTriangleIndicesEXT[8] = uvec3(4, 5, 6);
+    gl_PrimitiveTriangleIndicesEXT[9] = uvec3(4, 6, 7);
+    
+    SetMeshOutputsEXT(8, 10);
+}
