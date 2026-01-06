@@ -456,7 +456,6 @@ void Grass::init(Renderer &renderer, const std::string &modelPath, const std::st
 
 void Grass::bindAndDispatch(vk::CommandBuffer &cmd, const vk::PipelineLayout &layout) {
     std::array<vk::DescriptorSet, 2> sets = {heDescriptorSet, perObjectDescriptorSet};
-    modelMatrix = glm::scale(mat4(1.0f), vec3(2.0f)); // DEBUG: Scale the grass mesh
     cmd.pushConstants(layout, trueAllGraphics, 0, sizeof(mat4), &modelMatrix);
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, shaderInterface::HESet, sets, {});
     

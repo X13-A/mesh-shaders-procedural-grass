@@ -1,7 +1,8 @@
 #ifndef SHADERINTERFACE_H
 #define SHADERINTERFACE_H
 #ifdef __cplusplus
-#include "imgui.h"
+//#include "external/imgui-widgets/bezier.hpp"
+#include "external/imgui-widgets/imgui_curve.hpp"
 #include <vulkan/vulkan.hpp>
 #include "vkHelper.hpp"
 #include "renderer.hpp"
@@ -480,17 +481,66 @@ UBOStruct(scalar, PerObjectSet, U_configBinding) PebbleUBO {
 #endif
 
 #ifdef GRASS_PIPELINE
+#define GRASS_BLADE_CURVE_POINTS 3
+#define GRASS_LOD_CURVE_POINTS 3
+
 UBOStruct(scalar, PerObjectSet, U_configBinding) GrassUBO {
     int nbFaces UBODefaultVal(0);
     float time UBODefaultVal(0.0f);
+    float grassBladeCurve[GRASS_BLADE_CURVE_POINTS * 2];
+    float lodCurve[GRASS_LOD_CURVE_POINTS * 2];
 
 #ifdef __cplusplus
+    
+    GrassUBO::GrassUBO()
+    {
+        // Control points (x, y)
+        grassBladeCurve[0] = 0.00f;  grassBladeCurve[1] = 0.0f;
+        grassBladeCurve[2] = 0.05f;  grassBladeCurve[3] = 1.0f;
+        grassBladeCurve[4] = 1.00f;  grassBladeCurve[5] = 1.0f;
+
+        // LOD pairs (distance, vertical strip count)
+        lodCurve[0] = 0.000;  lodCurve[1] = 12.0f;
+        lodCurve[2] = 1.0;  lodCurve[3] = 6.0f;
+        lodCurve[4] = 5.0;  lodCurve[5] = 3.0f;
+    }
+
     void displayUI(std::string meshName = "") {
         if (ImGui::CollapsingHeader(("Grass UBO " + meshName).c_str())) {
-            ImGui::PushItemWidth(100.0f);
-            ImGui::InputInt("Nb Faces", &nbFaces, 1, 100);
+
+            // ### Grass Blade Curve Editor ###
+            ImVec2 curvePoints[GRASS_BLADE_CURVE_POINTS];
+            for (int i = 0; i < GRASS_BLADE_CURVE_POINTS; ++i) {
+                curvePoints[i].x = grassBladeCurve[i * 2 + 0];
+                curvePoints[i].y = grassBladeCurve[i * 2 + 1];
+            }
+
+            int selectionIdx = -1;
+            if (ImGui::Curve("Grass blade curve", ImVec2(200, 200), GRASS_BLADE_CURVE_POINTS, curvePoints, &selectionIdx)) {
+                for (int i = 0; i < GRASS_BLADE_CURVE_POINTS; ++i) {
+                    grassBladeCurve[i * 2 + 0] = curvePoints[i].x;
+                    grassBladeCurve[i * 2 + 1] = curvePoints[i].y;
+                }
+            }
+
+            // ### Grass LOD Curve Editor ###
+            ImVec2 lodCurvePoints[GRASS_LOD_CURVE_POINTS];
+            for (int i = 0; i < GRASS_LOD_CURVE_POINTS; ++i) {
+                lodCurvePoints[i].x = lodCurve[i * 2 + 0];
+                lodCurvePoints[i].y = lodCurve[i * 2 + 1];
+            }
+
+            selectionIdx = -1;
+            float max_dist = 5;
+            int max_strips = 20;
+            if (ImGui::Curve("Grass LOD curve", ImVec2(200, 200), GRASS_LOD_CURVE_POINTS, lodCurvePoints, &selectionIdx, ImVec2(0, 0), ImVec2(max_dist, max_strips))) {
+                for (int i = 0; i < GRASS_LOD_CURVE_POINTS; ++i) {
+                    lodCurve[i * 2 + 0] = lodCurvePoints[i].x;
+                    lodCurve[i * 2 + 1] = lodCurvePoints[i].y;
+                }
+            }
+
             ImGui::Separator();
-            ImGui::PopItemWidth();
         }
     }
 #endif

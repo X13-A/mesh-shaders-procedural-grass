@@ -1,11 +1,23 @@
 #version 450
 #extension GL_EXT_mesh_shader : require
 #define GRASS_PIPELINE
+#define PI 3.14159265359
+#define EPSILON 1e-6
+#define MAX_STRIPS 25
+#define MIN_STRIPS 3
+
+#define BLADE_HEIGHT 0.1f
+#define BLADE_WIDTH 0.004f
+#define BLADE_LEANING 0.04f
+#define BLADE_FOLD_OFFSET 0.0010f
+#define WIND_DIRECTION PI / 2.0
+#define WIND_SCALE 0.01
+#define BLADE_OFFSET_SCALE 0.2f
 
 #include "../shaderInterface.h"
 
 layout(local_size_x = 1) in;
-layout(triangles, max_vertices = 8, max_primitives = 10) out;
+layout(triangles, max_vertices = 256, max_primitives = 256) out;
 
 struct TaskPayload {
     uint faceIndex;
@@ -16,124 +28,241 @@ taskPayloadSharedEXT TaskPayload payload[];
 layout(location = 0) out vec3 fragWorldPos[];
 layout(location = 1) out vec3 fragNormal[];
 layout(location = 2) out vec2 fragTexCoord[];
+layout(location = 3) perprimitiveEXT out flat uint outPrimitiveID[];
 
-float hash(vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+// Random float in [0, 1] range
+float rand(uint seed) {
+    return fract(sin(float(seed) * 12.9898) * 43758.5453);
 }
 
-void generateGrassBlade(uint faceIndex, out vec3 vertices[8], out vec2 uvs[8], out vec3 normals[8]) {
-    // Position of the first vertex in the face
-    vec3 basePos = getVertexPosRelative(faceIndex, 0);
-    vec3 faceNormal = getFaceNormal(faceIndex);
-    
-    // Random position-based offset
-    vec2 randSeed = basePos.xz + vec2(faceIndex * 0.1);
-    float heightRandom = hash(randSeed) * 0.5 + 0.75;
-    float xOffset = (hash(randSeed + vec2(1.0, 0.0)) - 0.5) * 0.2;
-    float zOffset = (hash(randSeed + vec2(0.0, 1.0)) - 0.5) * 0.2;
-    basePos += vec3(xOffset, 0.0, zOffset);
-    
-    float grassHeight = 0.1 * heightRandom;
-    float grassWidth = 0.005;
-
-    // Create a local coordinate system
-    vec3 up = normalize(faceNormal);
-    vec3 right = normalize(cross(up, vec3(0, 0, 1)));
-    vec3 forward = cross(right, up);
-    
-    // Simple wind animation
-    float windSway = sin(grassUbo.time * 2.0 + basePos.x * 1.0) * 0.05;
-    
-    // Base vertices
-    vec3 baseVertices[8] = {
-        vec3(-0.5, 0.0, -0.5), // Bottom vertices
-        vec3( 0.5, 0.0, -0.5),
-        vec3( 0.5, 0.0,  0.5),
-        vec3(-0.5, 0.0,  0.5),
-        vec3(-0.5, 1.0, -0.5), // Top vertices
-        vec3( 0.5, 1.0, -0.5),
-        vec3( 0.5, 1.0,  0.5),
-        vec3(-0.5, 1.0,  0.5)
-    };
-    
-    // Not great, will be replaced by parametric normals anyway
-    vec3 baseNormals[8] = {
-        normalize(vec3(-1.0, 0.0, -1.0)), 
-        normalize(vec3( 1.0, 0.0, -1.0)), 
-        normalize(vec3( 1.0, 0.0,  1.0)), 
-        normalize(vec3(-1.0, 0.0,  1.0)), 
-        normalize(vec3(-1.0,  1.0, -1.0)),
-        normalize(vec3( 1.0,  1.0, -1.0)),
-        normalize(vec3( 1.0,  1.0,  1.0)),
-        normalize(vec3(-1.0,  1.0,  1.0)) 
-    };
-    
-    // Transform matrix from local to world space
-    mat3 localToWorld = mat3(
-        right * grassWidth,
-        up * grassHeight,
-        forward * grassWidth
-    );
-    
-    // Transform vertices and normals
-    for (int i = 0; i < 8; i++) {
-        vec3 localPos = baseVertices[i];
-
-        // Add wind effect to top vertices
-        if (localPos.y > 0.5) {
-            localPos += vec3(windSway / grassWidth, 0.0, 0.0);
-        }
-        
-        // Transform to world space
-        vertices[i] = basePos + localToWorld * localPos;
-        normals[i] = normalize(localToWorld * baseNormals[i]);
-    }
-    
-    // Generate UVs
-    uvs[0] = vec2(0.0, 0.0);
-    uvs[1] = vec2(1.0, 0.0);
-    uvs[2] = vec2(1.0, 0.0);
-    uvs[3] = vec2(0.0, 0.0);
-    
-    uvs[4] = vec2(0.0, 1.0);
-    uvs[5] = vec2(1.0, 1.0);
-    uvs[6] = vec2(1.0, 1.0);
-    uvs[7] = vec2(0.0, 1.0);
-}
-
-void main()
+// Source: https://gpuopen.com/learn/mesh_shaders/mesh_shaders-procedural_grass_rendering/
+void MakePersistentLength(in vec3 v0, inout vec3 v1, inout vec3 v2, in float height)
 {
+    //Persistent length
+    vec3 v01 = v1 - v0;
+    vec3 v12 = v2 - v1;
+    float lv01 = length(v01);
+    float lv12 = length(v12);
+
+    float L1 = lv01 + lv12;
+    float L0 = length(v2-v0);
+    float L = (2.0f * L0 + L1) / 3.0f; //http://steve.hollasch.net/cgindex/curves/cbezarclen.html
+
+    float ldiff = height / L;
+    v01 = v01 * ldiff;
+    v12 = v12 * ldiff;
+    v1 = v0 + v01;
+    v2 = v1 + v12;
+}
+
+// Source: https://gpuopen.com/learn/mesh_shaders/mesh_shaders-procedural_grass_rendering/
+vec3 bezier(vec3 p0, vec3 p1, vec3 p2, float t)
+{
+    vec3 a = mix(p0, p1, t);
+    vec3 b = mix(p1, p2, t);
+    return mix(a, b, t);
+}
+
+vec2 bezier2(vec2 p0, vec2 p1, vec2 p2, float t)
+{
+    vec2 a = mix(p0, p1, t);
+    vec2 b = mix(p1, p2, t);
+    return mix(a, b, t);
+}
+
+// Source: https://gpuopen.com/learn/mesh_shaders/mesh_shaders-procedural_grass_rendering/
+vec3 bezierDerivative(vec3 p0, vec3 p1, vec3 p2, float t)
+{
+    return 2. * (1. - t) * (p1 - p0) + 2. * t * (p2 - p1);
+}
+
+// Source: https://gpuopen.com/learn/mesh_shaders/mesh_shaders-procedural_grass_rendering/
+vec2 getBladeDirection(uint seed) {
+    float bladeDirectionAngle = 2. * PI * rand(seed);
+    vec2 bladeDirection = vec2(cos(bladeDirectionAngle), sin(bladeDirectionAngle));
+    return bladeDirection;
+}
+
+// Source: https://gpuopen.com/learn/mesh_shaders/mesh_shaders-procedural_grass_rendering/
+vec3 GetWindOffset(vec2 pos, float time) {
+    float posOnSineWave = cos(WIND_DIRECTION) * pos.x - sin(WIND_DIRECTION) * pos.y;
+
+    // TODO: add perlin noise
+    float t     = time + posOnSineWave;// + 4 * PerlinNoise2D(0.1 * pos);
+    float windx = 2 * sin(.5 * t);
+    float windz = 1 * sin(1. * t);
+
+    return WIND_SCALE * vec3(windx, 0, windz);
+}
+
+void unpackGrassBladeCurve(inout vec2 c0, inout vec2 c1, inout vec2 c2)
+{
+    c0.x = grassUbo.grassBladeCurve[0];
+    c0.y = grassUbo.grassBladeCurve[1];
+
+    c1.x = grassUbo.grassBladeCurve[2];
+    c1.y = grassUbo.grassBladeCurve[3];
+
+    c2.x = grassUbo.grassBladeCurve[4];
+    c2.y = grassUbo.grassBladeCurve[5];
+}
+
+void unpackLodCurve(inout vec2 c0, inout vec2 c1, inout vec2 c2)
+{
+    c0.x = grassUbo.lodCurve[0];
+    c0.y = grassUbo.lodCurve[1];
+
+    c1.x = grassUbo.lodCurve[2];
+    c1.y = grassUbo.lodCurve[3];
+
+    c2.x = grassUbo.lodCurve[4];
+    c2.y = grassUbo.lodCurve[5];
+}
+
+uint getLOD (float distance) 
+{
+    vec2 c0, c1, c2;
+    unpackLodCurve(c0, c1, c2);
+
+    float start = c0.x;
+    float end = c2.x;
+    float t = clamp((distance - start) / (end - start), 0.0, 1.0);
+
+    vec2 result = bezier2(c0, c1, c2, t);
+
+    return clamp(uint(result.y), MIN_STRIPS, MAX_STRIPS);
+}
+
+void generateGrassBlade(uint faceIndex, out vec3 all_vertices[256], out vec2 all_UVs[256], out vec3 all_normals[256], out uvec3 all_tris[256], out uint n_strips) {
+    vec3 basePos = getVertexPosRelative(faceIndex, 0);
+
+    // Random position offset
+    float xOffset = (rand(faceIndex) - 0.5);
+    float zOffset = (rand(faceIndex + 238988) - 0.5);
+    basePos += vec3(xOffset, 0.0, zOffset) * BLADE_OFFSET_SCALE;
+    
+    // Set LOD
+    vec3 basePos_world = (constants.model * vec4(basePos, 1.0)).xyz;
+    float distance = length(viewUbo.cameraPosition.xyz - basePos_world);
+    n_strips = getLOD(distance);
+
+    // TODO: do all of this relative to the face normal
+    vec2 c0, c1, c2;
+    unpackGrassBladeCurve(c0, c1, c2);
+
+    // Random height and direction
+    float bladeHeight = (0.25f + rand(faceIndex)) * BLADE_HEIGHT;
+    vec2 bladeDirection = getBladeDirection(faceIndex);
+    
+    vec3 p0 = basePos + vec3(0, c0.y, 0) + vec3(bladeDirection.x, 0, bladeDirection.y) * c0.x;
+    vec3 p1 = basePos + vec3(0, c1.y * bladeHeight, 0) + vec3(bladeDirection.x, 0, bladeDirection.y) * c1.x * BLADE_LEANING;
+    vec3 p2 = basePos + vec3(0, c2.y * bladeHeight, 0) + vec3(bladeDirection.x, 0, bladeDirection.y) * c2.x * BLADE_LEANING;
+    
+    vec3 windOffset = GetWindOffset(basePos.xz, grassUbo.time);
+    p1 += windOffset;
+    p2 += windOffset;
+
+    // Normalize
+    // TODO: double check if this is visually better
+    MakePersistentLength(p0, p1, p2, bladeHeight);
+
+    float width = BLADE_WIDTH;
+    vec3 sideVec = normalize(vec3(bladeDirection.y, 0, -bladeDirection.x));
+    vec3 offset  = width * sideVec;
+
+    vec3 p0_minus = p0 - offset * 1.0;
+    vec3 p1_minus = p1 - offset * 0.7;
+    vec3 p2_minus = p2 - offset * 0.3;
+
+    vec3 p0_plus = p0 + offset * 1.0;
+    vec3 p1_plus = p1 + offset * 0.7;
+    vec3 p2_plus = p2 + offset * 0.3;
+
+    // Each strip has 3 vertices: 256 / 3 = 85
+    // Each strip has 4 triangles, except the last one which has 0
+    
+    // Max segments for 256 max primitives: 
+    //     (N - 1) * 4 <= 256
+    // <=> N - 1 <= 64
+    // <=> N <= 65
+    // Max N is 65.
+
+    // TODO: Read more about how to properly set the buffer sizes
+    for (int i = 0; i < n_strips; i++) {
+        float t = float(i) / (n_strips - 1);
+        
+        vec3 pi_minus = bezier(p0_minus, p1_minus, p2_minus, t);
+        vec3 pi = bezier(p0, p1, p2, t);
+        vec3 pi_plus = bezier(p0_plus, p1_plus, p2_plus, t);
+
+        // TODO: Fold the blade a bit and compute normals
+        // Tried: flat normals, didn't look good on low strip count
+        // Tried: Smooth normals, kind of works.
+        // Maybe: Just shift the normal depending on horizontal UV (much more efficient).
+
+        vec3 tangent = normalize(bezierDerivative(p0, p1, p2, t));
+        vec3 normal_pi = cross(sideVec, tangent);
+        pi += normal_pi * BLADE_FOLD_OFFSET;   
+
+        vec3 to_minus = normalize(pi_minus - pi);
+        vec3 to_plus = normalize(pi_plus - pi);
+
+        vec3 normal_pi_minus = cross(tangent, to_minus);
+        vec3 normal_pi_plus = cross(tangent, to_plus);
+        
+        all_vertices[i * 3 + 0] = pi_minus;
+        all_vertices[i * 3 + 1] = pi;
+        all_vertices[i * 3 + 2] = pi_plus;
+
+        all_UVs[i * 3 + 0] = vec2(0, t);
+        all_UVs[i * 3 + 1] = vec2(0.5, t);
+        all_UVs[i * 3 + 2] = vec2(1, t);
+
+        // TODO: Perhaps different normals depending on horizontal UV would be enough visually, instead of adding the middle column
+        all_normals[i * 3 + 0] = normal_pi_minus;
+        all_normals[i * 3 + 1] = normal_pi;
+        all_normals[i * 3 + 2] = normal_pi_plus;
+    }
+
+    for (int i = 0; i < n_strips - 1; i++) {
+        // Left
+        all_tris[i * 4] = uvec3(i * 3, (i+1) * 3, i * 3 + 1);
+        all_tris[i * 4 + 1] = uvec3((i+1) * 3, (i+1) * 3 + 1, i * 3 + 1);
+     
+        // Right
+        all_tris[i * 4 + 2] = uvec3(i * 3 + 1, (i+1) * 3 + 1, (i+1) * 3 + 2);
+        all_tris[i * 4 + 3] = uvec3(i * 3 + 1, (i+1) * 3 + 2, i * 3 + 2);
+    }
+}
+
+void main() {
     uint faceIndex = payload[0].faceIndex;
     
-    vec3 grassVertices[8];
-    vec2 grassUVs[8];
-    vec3 grassNormals[8]; // Add this line
-    generateGrassBlade(faceIndex, grassVertices, grassUVs, grassNormals); // Update this line
+    vec3 grassVertices[256];
+    vec2 grassUVs[256];
+    vec3 grassNormals[256];
+    uvec3 grassTris[256];
+
+    uint n_strips;
+    generateGrassBlade(faceIndex, grassVertices, grassUVs, grassNormals, grassTris, n_strips);
     
     // Transform vertices to clip space and set output data
     mat4 mvp = viewUbo.projection * viewUbo.view * constants.model;
     
-    for (int i = 0; i < 8; i++)
-    {
+    for (int i = 0; i < n_strips * 3; i++) {
         gl_MeshVerticesEXT[i].gl_Position = mvp * vec4(grassVertices[i], 1.0);
         fragWorldPos[i] = (constants.model * vec4(grassVertices[i], 1.0)).xyz;
         fragTexCoord[i] = grassUVs[i];
         
         // Use the generated normals instead of the face normal
-        fragNormal[i] = normalize(mat3(constants.model) * vec3(0, 1, 0));
+        // TODO: Double check this: does it really need a normal matrix ? We could assume that the scaling is uniform
+        fragNormal[i] = normalize(mat3(constants.model) * grassNormals[i]);
     }
     
-    // Define triangles for the grass blade box (same as before)
-    gl_PrimitiveTriangleIndicesEXT[0] = uvec3(3, 7, 6);
-    gl_PrimitiveTriangleIndicesEXT[1] = uvec3(3, 6, 2);
-    gl_PrimitiveTriangleIndicesEXT[2] = uvec3(0, 1, 5);
-    gl_PrimitiveTriangleIndicesEXT[3] = uvec3(0, 5, 4);
-    gl_PrimitiveTriangleIndicesEXT[4] = uvec3(0, 4, 7);
-    gl_PrimitiveTriangleIndicesEXT[5] = uvec3(0, 7, 3);
-    gl_PrimitiveTriangleIndicesEXT[6] = uvec3(1, 2, 6);
-    gl_PrimitiveTriangleIndicesEXT[7] = uvec3(1, 6, 5);
-    gl_PrimitiveTriangleIndicesEXT[8] = uvec3(4, 5, 6);
-    gl_PrimitiveTriangleIndicesEXT[9] = uvec3(4, 6, 7);
+    for (int i = 0; i < (n_strips - 1) * 4; i++) {
+        gl_PrimitiveTriangleIndicesEXT[i] = grassTris[i];
+        outPrimitiveID[i] = i;
+    }
     
-    SetMeshOutputsEXT(8, 10);
+    SetMeshOutputsEXT(n_strips * 3, (n_strips - 1) * 4);
 }
